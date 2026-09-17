@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.db
+
+# Node / Vite
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Playwright
+playwright-report/
+test-results/
+
+# Env / editors
+.env
+.DS_Store

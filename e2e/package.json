@@ -1,0 +1,14 @@
+{
+  "name": "roll-cutting-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "typescript": "~5.6.2"
+  }
+}
