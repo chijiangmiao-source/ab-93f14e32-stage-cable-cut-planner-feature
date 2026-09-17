@@ -15,6 +15,9 @@ class SegmentIn(BaseModel):
     length: int = Field(ge=MIN_LEN, le=MAX_LEN)
     # Optional end-trim allowance; omitted means 0 (legacy clients).
     allowance: int = Field(default=0, ge=MIN_ALLOWANCE, le=MAX_ALLOWANCE)
+    # Optional kit number: segments sharing one number must stay on the
+    # same roll. Omitted/null packs the segment independently (legacy).
+    kit_no: int | None = Field(default=None, ge=MIN_LEN, le=MAX_LEN)
 
 
 class PlanCreate(BaseModel):
@@ -30,6 +33,9 @@ class SegmentOut(BaseModel):
     id: str
     length: int
     allowance: int
+    # Kit number kept beside the original cutting order; None for
+    # independent segments and for every historical cut.
+    kit_no: int | None = None
     # None while the segment is waiting to be cut; old plans keep None.
     completed_at: datetime | None = None
 

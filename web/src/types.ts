@@ -2,6 +2,9 @@ export interface SegmentOut {
   id: string
   length: number
   allowance: number
+  /** Kit number kept beside the cutting order; null/absent for segments
+   *  packed independently and for historical plans. */
+  kit_no?: number | null
   /** ISO timestamp once this segment has actually been cut; null otherwise. */
   completed_at: string | null
 }
@@ -44,6 +47,9 @@ export interface SegmentInput {
   id: string
   length: number
   allowance?: number
+  /** Omitted for an independent segment; segments sharing a number are
+   *  solved as one indivisible kit on a single roll. */
+  kit_no?: number | null
 }
 
 export interface PlanCreateInput {

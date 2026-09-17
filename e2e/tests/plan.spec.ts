@@ -406,4 +406,112 @@ test.describe('roll cutting planner', () => {
     await expect(page.getByTestId('segment-length-1')).toHaveValue('300')
     await expect(page.getByTestId('segment-length-2')).toHaveValue('200')
   })
+
+  test.describe('segment kits', () => {
+    test('a fittable kit keeps its segments on one roll and survives a refresh with the same order', async ({
+      page,
+    }) => {
+      await page.goto('/')
+      // roll 900, kerf 10: without the kit the canonical result is [A],[B,C]
+      // (A+C 910 > 900); kit {A,B} forces 400+300+10 = 710 onto roll 1.
+      await page.getByTestId('roll-length').fill('900')
+      await page.getByTestId('kerf-width').fill('10')
+      await page.getByTestId('segment-id-0').fill('A')
+      await page.getByTestId('segment-length-0').fill('400')
+      await page.getByTestId('segment-kit-0').fill('7')
+      await page.getByTestId('segment-id-1').fill('B')
+      await page.getByTestId('segment-length-1').fill('300')
+      await page.getByTestId('segment-kit-1').fill('7')
+      await page.getByTestId('segment-id-2').fill('C')
+      await page.getByTestId('segment-length-2').fill('500')
+      await page.getByTestId('submit-plan').click()
+
+      await expect(page).toHaveURL(/\/plans\/\d+$/)
+      await expect(page.getByText('第 1 卷')).toBeVisible()
+      await expect(page.getByText('第 2 卷')).toBeVisible()
+      const orderLines = page.locator('.cutting-order')
+      // the kit stays together on roll 1 and carries the kit badge
+      await expect(
+        orderLines.filter({ hasText: /A（交付 400 mm \+ 余量 0 mm = 下料 400 mm · 套组 7） → B（交付 300 mm \+ 余量 0 mm = 下料 300 mm · 套组 7）/ }),
+      ).toBeVisible()
+      await expect(
+        orderLines.filter({ hasText: 'C（交付 500 mm + 余量 0 mm = 下料 500 mm）' }),
+      ).toBeVisible()
+      // roll 1: 400+300 + one kerf of 10 = 710, leftover 190
+      await expect(page.getByText(/余料 190 mm/)).toBeVisible()
+      await expect(page.getByText(/余料 400 mm/)).toBeVisible()
+
+      // after refresh the same roll order and kit markers are still there
+      await page.reload()
+      await expect(
+        orderLines.filter({ hasText: /A（交付 400 mm \+ 余量 0 mm = 下料 400 mm · 套组 7） → B（交付 300 mm \+ 余量 0 mm = 下料 300 mm · 套组 7）/ }),
+      ).toBeVisible()
+      await expect(
+        orderLines.filter({ hasText: 'C（交付 500 mm + 余量 0 mm = 下料 500 mm）' }),
+      ).toBeVisible()
+    })
+
+    test('a kit that cannot fit one roll is located on every member kit input and nothing is created', async ({
+      page,
+    }) => {
+      // baseline: how many plans already exist in the shared history
+      await page.goto('/plans')
+      const before = await page.locator('.plan-table tbody tr').count()
+
+      await page.goto('/')
+      // A 600 + B 590 + 10 kerf = 1200 > 1000: the kit overflows by 200 mm
+      await page.getByTestId('segment-kit-0').fill('3')
+      await page.getByTestId('segment-kit-1').fill('3')
+      await page.getByTestId('submit-plan').click()
+
+      // both member kit inputs carry the located error with the overflow
+      const alerts = page.getByText(/the kit overflows by 200 mm/)
+      await expect(alerts).toHaveCount(2)
+      // form preserved, still on the new-plan page
+      await expect(page).toHaveURL(/\/$/)
+      await expect(page.getByTestId('segment-kit-0')).toHaveValue('3')
+      await expect(page.getByTestId('segment-kit-1')).toHaveValue('3')
+      await expect(page.getByTestId('segment-kit-2')).toHaveValue('')
+
+      // the failed submission created no plan: the history count is unchanged
+      await page.goto('/plans')
+      await expect(page.locator('.plan-table tbody tr')).toHaveCount(before)
+    })
+
+    test('kitted segments still complete and undo one segment at a time', async ({
+      page,
+    }) => {
+      await page.goto('/')
+      await page.getByTestId('roll-length').fill('900')
+      await page.getByTestId('kerf-width').fill('10')
+      await page.getByTestId('segment-id-0').fill('A')
+      await page.getByTestId('segment-length-0').fill('400')
+      await page.getByTestId('segment-kit-0').fill('7')
+      await page.getByTestId('segment-id-1').fill('B')
+      await page.getByTestId('segment-length-1').fill('300')
+      await page.getByTestId('segment-kit-1').fill('7')
+      await page.getByTestId('segment-id-2').fill('C')
+      await page.getByTestId('segment-length-2').fill('500')
+      await page.getByTestId('submit-plan').click()
+      await expect(page).toHaveURL(/\/plans\/\d+$/)
+
+      // kit lives on roll 1 (A, B): completion stays per segment
+      await page.getByTestId('complete-roll-1').click()
+      await expect(page.getByTestId('overall-progress')).toHaveText('1 / 3 段')
+      await expect(page.getByTestId('cut-1-1')).toHaveClass(/cut-status-done/)
+      await expect(page.getByTestId('cut-1-2')).toHaveClass(/cut-status-next/)
+
+      await page.getByTestId('complete-roll-1').click()
+      await expect(page.getByTestId('overall-progress')).toHaveText('2 / 3 段')
+
+      // undo clears only the last segment (B), A stays done; kit marker intact
+      await page.getByTestId('undo-roll-1').click()
+      await expect(page.getByTestId('overall-progress')).toHaveText('1 / 3 段')
+      await expect(page.getByTestId('cut-1-1')).toHaveClass(/cut-status-done/)
+      await expect(page.getByTestId('cut-1-2')).toHaveClass(/cut-status-next/)
+      await expect(
+        page.locator('.cutting-order').filter({ hasText: /套组 7/ }),
+      ).toBeVisible()
+    })
+  })
 })

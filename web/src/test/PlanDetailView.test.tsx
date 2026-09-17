@@ -241,8 +241,7 @@ describe('PlanDetailView', () => {
     expect(screen.getByTestId('adjust-from-plan').getAttribute('href')).toBe('/?from=9')
   })
 
-  it('shows allowance and recomputes the roll from actual cut lengths', () => {
-    const withAllowance = makePlan({
+  it('shows allowance and recomputes the roll from actual cut lengths', () => {    const withAllowance = makePlan({
       rolls_used: 3,
       total_kerf_count: 0,
       total_leftover: 1360,
@@ -282,5 +281,78 @@ describe('PlanDetailView', () => {
     expect(text).toContain(
       '450（下料合计 = 交付 400 mm + 余量 50 mm）+ 0 × 10（锯口）= 450 mm ≤ 1000 mm；余料 550 mm；锯口 0 次',
     )
+  })
+
+  it('shows the kit number beside the cutting order and hides it for independent cuts', () => {
+    const withKit = makePlan({
+      rolls: [
+        {
+          position: 1,
+          segments: [
+            { id: 'A', length: 400, allowance: 0, kit_no: 7, completed_at: null },
+            { id: 'B', length: 300, allowance: 0, kit_no: 7, completed_at: null },
+          ],
+          kerf_count: 1,
+          used_length: 710,
+          leftover: 190,
+          completed_count: 0,
+        },
+        {
+          position: 2,
+          segments: [{ id: 'C', length: 500, allowance: 0, completed_at: null }],
+          kerf_count: 0,
+          used_length: 500,
+          leftover: 400,
+          completed_count: 0,
+        },
+      ],
+    })
+    const { container } = renderView(withKit)
+    const text = container.textContent ?? ''
+    // kit members carry the badge next to the cutting order
+    expect(text).toContain('A（交付 400 mm + 余量 0 mm = 下料 400 mm · 套组 7）')
+    expect(text).toContain('B（交付 300 mm + 余量 0 mm = 下料 300 mm · 套组 7）')
+    // independent segments (and historical cuts with no kit field) show none
+    expect(text).toContain('C（交付 500 mm + 余量 0 mm = 下料 500 mm）')
+    expect(text).not.toContain('套组 null')
+  })
+
+  it('keeps per-segment completion and undo flow available inside a kit roll', async () => {
+    const onComplete = vi.fn()
+    const onUndo = vi.fn()
+    const kitRollDone = makePlan({
+      completed_segment_count: 1,
+      rolls: [
+        {
+          position: 1,
+          segments: [
+            {
+              id: 'A',
+              length: 400,
+              allowance: 0,
+              kit_no: 7,
+              completed_at: '2026-09-12T09:00:00Z',
+            },
+            { id: 'B', length: 300, allowance: 0, kit_no: 7, completed_at: null },
+          ],
+          kerf_count: 1,
+          used_length: 710,
+          leftover: 190,
+          completed_count: 1,
+        },
+        makePlan().rolls[1],
+      ],
+    })
+    const user = userEvent.setup()
+    renderView(kitRollDone, false, onComplete, onUndo)
+
+    // A already cut, B is the single next cut — the kit does not complete
+    // or undo as one block.
+    expect(screen.getByTestId('cut-1-1')).toHaveClass('cut-status-done')
+    expect(screen.getByTestId('cut-1-2')).toHaveClass('cut-status-next')
+    await user.click(screen.getByTestId('complete-roll-1'))
+    expect(onComplete).toHaveBeenCalledWith(1, 2)
+    await user.click(screen.getByTestId('undo-roll-1'))
+    expect(onUndo).toHaveBeenCalledWith(1, 1)
   })
 })

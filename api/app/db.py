@@ -53,3 +53,7 @@ def run_migrations():
                         "ADD COLUMN allowance INTEGER NOT NULL DEFAULT 0"
                     )
                 )
+        # The optional kit number stays NULL for every historical cut.
+        if "kit_no" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cuts ADD COLUMN kit_no INTEGER"))

@@ -16,7 +16,12 @@ import type { SegmentRow } from '../segmentRows'
 export interface PlanFormInitial {
   roll_length: number
   kerf_width: number
-  segments: { id: string; length: number; allowance?: number }[]
+  segments: {
+    id: string
+    length: number
+    allowance?: number
+    kit_no?: number | null
+  }[]
 }
 
 interface PlanFormProps {
@@ -46,7 +51,12 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
   const [rows, setRows] = useState<SegmentRow[]>(() =>
     initial
       ? initial.segments.map((s) =>
-          makeRow(s.id, String(s.length), String(s.allowance ?? 0)),
+          makeRow(
+            s.id,
+            String(s.length),
+            String(s.allowance ?? 0),
+            s.kit_no != null ? String(s.kit_no) : '',
+          ),
         )
       : [
           makeRow('S1', '600'),
@@ -109,6 +119,17 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
       }
       return value
     }
+    // Optional kit number: blank means the segment is packed independently.
+    // Segments sharing one number must all fit a single roll together.
+    const parseKit = (raw: string, key: string): number | null => {
+      if (!raw.trim()) return null
+      const value = Number(raw)
+      if (!Number.isInteger(value) || value < 1 || value > 100000) {
+        push(key, '套组编号须为 1 至 100000 的整数，留空则不分组')
+        return null
+      }
+      return value
+    }
     const roll_length = parseLen(rollLength, 'roll_length')
     const kerf_width = parseLen(kerfWidth, 'kerf_width')
     const segments = rows.map((row, i) => {
@@ -118,6 +139,7 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
         id,
         length: parseLen(row.length, `segments.${i}.length`),
         allowance: parseAllowance(row.allowance, `segments.${i}.allowance`),
+        kit_no: parseKit(row.kit, `segments.${i}.kit_no`),
       }
     })
     if (local.size > 0) {
@@ -284,6 +306,22 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
                 }
               />
               <FieldErrors messages={fieldError(`segments.${i}.allowance`)} />
+            </label>
+            <label>
+              套组编号（可空）
+              <input
+                data-testid={`segment-kit-${i}`}
+                type="number"
+                min={1}
+                max={100000}
+                step={1}
+                placeholder="不分组"
+                value={row.kit}
+                onChange={(e) =>
+                  setRows(updateRow(rows, row.key, { kit: e.target.value }))
+                }
+              />
+              <FieldErrors messages={fieldError(`segments.${i}.kit_no`)} />
             </label>
             <button
               type="button"

@@ -6,12 +6,19 @@ export interface SegmentRow {
   id: string
   length: string
   allowance: string
+  /** Optional kit number as typed in the form; blank packs independently. */
+  kit: string
 }
 
 let nextKey = 1
 
-export function makeRow(id = '', length = '', allowance = ''): SegmentRow {
-  return { key: nextKey++, id, length, allowance }
+export function makeRow(
+  id = '',
+  length = '',
+  allowance = '',
+  kit = '',
+): SegmentRow {
+  return { key: nextKey++, id, length, allowance, kit }
 }
 
 /** Smallest "S<n>" id not currently used: S1, S2, ... */
@@ -35,7 +42,7 @@ export function removeRow(rows: SegmentRow[], key: number): SegmentRow[] {
 export function updateRow(
   rows: SegmentRow[],
   key: number,
-  patch: Partial<Pick<SegmentRow, 'id' | 'length' | 'allowance'>>,
+  patch: Partial<Pick<SegmentRow, 'id' | 'length' | 'allowance' | 'kit'>>,
 ): SegmentRow[] {
   return rows.map((r) => (r.key === key ? { ...r, ...patch } : r))
 }

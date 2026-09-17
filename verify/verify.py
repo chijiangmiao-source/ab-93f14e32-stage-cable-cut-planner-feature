@@ -406,6 +406,96 @@ def main():
           before_count >= 0 and after_count == before_count,
           f"before={before_count} after={after_count}")
 
+    # --- kits: omitted field keeps the legacy plan ---------------------------
+    legacy_kit_payload = {
+        "roll_length": 900,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 400},
+            {"id": "B", "length": 300},
+            {"id": "C", "length": 500},
+        ],
+    }
+    status, legacy_kit_plan = request("POST", f"{API_URL}/api/plans", legacy_kit_payload)
+    check("no-kit case created", status == 201 and isinstance(legacy_kit_plan, dict),
+          str(legacy_kit_plan))
+    if isinstance(legacy_kit_plan, dict):
+        check("no-kit request keeps the independent packing [[A],[B,C]]",
+              [[s["id"] for s in r["segments"]] for r in legacy_kit_plan["rolls"]]
+              == [["A"], ["B", "C"]], str(legacy_kit_plan.get("rolls")))
+        check("no-kit cuts report null kit numbers",
+              all(s.get("kit_no") is None
+                  for r in legacy_kit_plan["rolls"] for s in r["segments"]))
+
+    # --- kits: a fittable kit never spans rolls; capacity closes -------------
+    kit_payload = {
+        "roll_length": 900,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 400, "kit_no": 7},
+            {"id": "B", "length": 300, "kit_no": 7},
+            {"id": "C", "length": 500},
+        ],
+    }
+    status, kit_plan = request("POST", f"{WEB_URL}/api/plans", kit_payload)
+    check("fittable kit plan created via the web proxy",
+          status == 201 and isinstance(kit_plan, dict), str(kit_plan))
+    if not isinstance(kit_plan, dict):
+        sys.exit(1)
+    check("fittable kit never spans rolls: [[A,B],[C]]",
+          [[s["id"] for s in r["segments"]] for r in kit_plan["rolls"]]
+          == [["A", "B"], ["C"]], str(kit_plan.get("rolls")))
+    check("kit members carry the kit number, independent segment is null",
+          [s["kit_no"] for s in kit_plan["rolls"][0]["segments"]] == [7, 7]
+          and [s["kit_no"] for s in kit_plan["rolls"][1]["segments"]] == [None],
+          str(kit_plan))
+    for roll in kit_plan["rolls"]:
+        cut_sum = sum(s["length"] + s.get("allowance", 0) for s in roll["segments"])
+        total = cut_sum + roll["kerf_count"] * kit_plan["kerf_width"] + roll["leftover"]
+        check(f"kit roll {roll['position']} capacity recomputes and closes",
+              total == kit_plan["roll_length"]
+              and roll["used_length"] + roll["leftover"] == kit_plan["roll_length"],
+              str(roll))
+    check("kit internal kerf counted once on the shared roll",
+          kit_plan["rolls"][0]["used_length"] == 400 + 300 + 10
+          and kit_plan["rolls"][0]["leftover"] == 190, str(kit_plan["rolls"][0]))
+
+    # refresh the detail (as the page does after reload): same roll order and
+    # the same kit markers survive
+    status, kit_refetch = request("GET", f"{WEB_URL}/api/plans/{kit_plan['id']}")
+    check("kit plan detail keeps the same roll order and kit numbers after refresh",
+          status == 200 and kit_refetch == kit_plan, str(status))
+
+    # --- kits: an unfittable kit is located on every member and not saved ----
+    status, plans_before_kit_fail = request("GET", f"{API_URL}/api/plans")
+    before_kit_ids = {p["id"] for p in plans_before_kit_fail}
+    bad_kit = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600, "kit_no": 3},
+            {"id": "B", "length": 590, "kit_no": 3},
+            {"id": "C", "length": 400},
+        ],
+    }
+    status, body = request("POST", f"{WEB_URL}/api/plans", bad_kit)
+    check("unfittable kit -> 422", status == 422, str(body))
+    check("unfittable kit error locates every member kit input",
+          ["segments", 0, "kit_no"] in locs_of(body)
+          and ["segments", 1, "kit_no"] in locs_of(body)
+          and ["segments", 2, "kit_no"] not in locs_of(body), str(body))
+    overflow_msgs = [e.get("msg", "") for e in body.get("detail", [])
+                     if isinstance(e, dict) and e.get("loc", [None])[-1] == "kit_no"]
+    check("unfittable kit error states the overflow in millimetres",
+          len(overflow_msgs) == 2
+          and all("needs 1200 mm" in m and "overflows by 200 mm" in m
+                  for m in overflow_msgs), str(overflow_msgs))
+    status, plans_after_kit_fail = request("GET", f"{API_URL}/api/plans")
+    after_kit_ids = {p["id"] for p in plans_after_kit_fail}
+    check("unfittable kit submission persisted no plan",
+          after_kit_ids == before_kit_ids,
+          f"{before_kit_ids} -> {after_kit_ids}")
+
     print()
     if failures:
         print(f"VERIFY FAILED: {len(failures)} check(s) failed")

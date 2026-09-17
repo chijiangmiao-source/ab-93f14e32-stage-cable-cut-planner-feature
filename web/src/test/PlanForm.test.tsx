@@ -121,4 +121,90 @@ describe('PlanForm adjustment flow', () => {
     expect(body.source_plan_id).toBe(8)
     expect(body.segments[1].length).toBe(380)
   })
+
+  it('sends null kit_no for blank kit inputs (independent packing)', async () => {
+    createPlanMock.mockResolvedValueOnce({ id: 1 })
+    renderForm()
+    // all three kit inputs start blank
+    expect(screen.getByTestId('segment-kit-0')).toHaveValue(null)
+    expect(screen.getByTestId('segment-kit-2')).toHaveValue(null)
+    fireEvent.click(screen.getByTestId('submit-plan'))
+
+    await waitFor(() => expect(createPlanMock).toHaveBeenCalledTimes(1))
+    const body = createPlanMock.mock.calls[0][0]
+    expect(body.segments.map((s: { kit_no: unknown }) => s.kit_no)).toEqual([
+      null,
+      null,
+      null,
+    ])
+  })
+
+  it('sends kit numbers only for the rows that carry one', async () => {
+    createPlanMock.mockResolvedValueOnce({ id: 9 })
+    renderForm()
+    fireEvent.change(screen.getByTestId('segment-kit-0'), { target: { value: '2' } })
+    fireEvent.change(screen.getByTestId('segment-kit-2'), { target: { value: '2' } })
+    fireEvent.click(screen.getByTestId('submit-plan'))
+
+    await waitFor(() => expect(createPlanMock).toHaveBeenCalledTimes(1))
+    const body = createPlanMock.mock.calls[0][0]
+    expect(body.segments.map((s: { kit_no: unknown }) => s.kit_no)).toEqual([
+      2,
+      null,
+      2,
+    ])
+  })
+
+  it('carries kit numbers over verbatim from the source plan', () => {
+    const withKits: PlanFormInitial = {
+      ...initial,
+      segments: [
+        { id: 'A', length: 600, kit_no: 4 },
+        { id: 'B', length: 590 },
+        { id: 'C', length: 400, allowance: 50, kit_no: 4 },
+      ],
+    }
+    renderForm({ initial: withKits, sourcePlanId: 5 })
+    expect(screen.getByTestId('segment-kit-0')).toHaveValue(4)
+    expect(screen.getByTestId('segment-kit-1')).toHaveValue(null)
+    expect(screen.getByTestId('segment-kit-2')).toHaveValue(4)
+  })
+
+  it('rejects a non-positive kit input locally and keeps the form', async () => {
+    renderForm()
+    fireEvent.change(screen.getByTestId('segment-kit-1'), { target: { value: '0' } })
+    fireEvent.click(screen.getByTestId('submit-plan'))
+    expect(await screen.findByText(/套组编号须为/)).toBeInTheDocument()
+    expect(createPlanMock).not.toHaveBeenCalled()
+    // the bad value stays in the input for correction
+    expect(screen.getByTestId('segment-kit-1')).toHaveValue(0)
+  })
+
+  it('maps a server kit overflow 422 onto every member kit input and preserves the form', async () => {
+    createPlanMock.mockRejectedValueOnce(
+      new ApiError(422, '输入校验未通过', [
+        {
+          loc: ['segments', 0, 'kit_no'],
+          msg: 'kit 3 needs 1200 mm in one roll but the roll length is 1000 mm; the kit overflows by 200 mm',
+          type: 'value_error',
+        },
+        {
+          loc: ['segments', 1, 'kit_no'],
+          msg: 'kit 3 needs 1200 mm in one roll but the roll length is 1000 mm; the kit overflows by 200 mm',
+          type: 'value_error',
+        },
+      ]),
+    )
+    renderForm()
+    fireEvent.change(screen.getByTestId('segment-kit-0'), { target: { value: '3' } })
+    fireEvent.change(screen.getByTestId('segment-kit-1'), { target: { value: '3' } })
+    fireEvent.click(screen.getByTestId('submit-plan'))
+
+    const alerts = await screen.findAllByText(/overflows by 200 mm/)
+    expect(alerts).toHaveLength(2)
+    // still on the form, every input (including both kit numbers) preserved
+    expect(screen.getByTestId('segment-kit-0')).toHaveValue(3)
+    expect(screen.getByTestId('segment-kit-1')).toHaveValue(3)
+    expect(screen.getByTestId('segment-length-0')).toHaveValue(600)
+  })
 })

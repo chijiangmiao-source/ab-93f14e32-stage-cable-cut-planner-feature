@@ -22,7 +22,7 @@ API_ROOT = Path(__file__).resolve().parent.parent
 ALEMBIC_INI = API_ROOT / "alembic.ini"
 
 BASELINE_REVISION = "0001_baseline"
-HEAD_REVISION = "0002_cut_completed_at"
+HEAD_REVISION = "0003_cut_kit_no"
 
 
 def _config(connection) -> Config:
@@ -57,7 +57,12 @@ def run_startup_migrations(engine: Engine) -> None:
         # release database predates migrations: tell Alembic which revision
         # the live schema already matches.
         cut_columns = {c["name"] for c in inspector.get_columns("cuts")}
-        stamp = HEAD_REVISION if "completed_at" in cut_columns else BASELINE_REVISION
+        if "completed_at" not in cut_columns:
+            stamp = BASELINE_REVISION
+        elif "kit_no" not in cut_columns:
+            stamp = "0002_cut_completed_at"
+        else:
+            stamp = HEAD_REVISION
         with engine.begin() as conn:
             command.stamp(_config(conn), stamp)
 

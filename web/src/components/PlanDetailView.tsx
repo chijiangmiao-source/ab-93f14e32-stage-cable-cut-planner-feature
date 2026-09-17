@@ -16,11 +16,15 @@ function formatTime(iso: string): string {
 
 /** Every segment shows delivery, allowance and actual cut length, so a
  * zero (or unset) allowance is stated explicitly instead of hiding the
- * cut length behind a single number. */
+ * cut length behind a single number. Segments of a kit additionally show
+ * their kit number beside the cutting order; independent segments (and
+ * every historical cut) show nothing. */
 function formatSegment(seg: SegmentOut): string {
+  const kit =
+    seg.kit_no !== null && seg.kit_no !== undefined ? ` · 套组 ${seg.kit_no}` : ''
   return (
     `${seg.id}（交付 ${seg.length} mm + 余量 ${seg.allowance} mm = ` +
-    `下料 ${seg.length + seg.allowance} mm）`
+    `下料 ${seg.length + seg.allowance} mm${kit}）`
   )
 }
 

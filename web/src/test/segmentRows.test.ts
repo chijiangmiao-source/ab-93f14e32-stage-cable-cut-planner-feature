@@ -67,4 +67,28 @@ describe('makeRow', () => {
     expect(makeRow('S1', '100').allowance).toBe('')
     expect(makeRow('S1', '100', '25').allowance).toBe('25')
   })
+
+  it('defaults the kit number to blank (treated as ungrouped)', () => {
+    expect(makeRow('S1', '100').kit).toBe('')
+    expect(makeRow('S1', '100', '', '3').kit).toBe('3')
+  })
+})
+
+describe('kit numbers', () => {
+  it('updateRow patches only the kit field', () => {
+    const a = makeRow('S1', '100')
+    const rows = updateRow([a], a.key, { kit: '2' })
+    expect(rows[0].kit).toBe('2')
+    expect(rows[0].id).toBe('S1')
+    expect(rows[0].length).toBe('100')
+  })
+
+  it('add/remove rows keep the kit value of untouched rows', () => {
+    const a = makeRow('S1', '100', '', '5')
+    const rows = addRow([a])
+    expect(rows[0].kit).toBe('5')
+    expect(rows[1].kit).toBe('')
+    const removed = removeRow(rows, rows[1].key)
+    expect(removed).toEqual([a])
+  })
 })

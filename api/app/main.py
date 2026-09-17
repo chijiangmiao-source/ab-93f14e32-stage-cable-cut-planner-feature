@@ -66,6 +66,7 @@ def _plan_to_out(plan: Plan) -> PlanOut:
                     id=cut.segment_id,
                     length=cut.length,
                     allowance=cut.allowance,
+                    kit_no=cut.kit_no,
                     completed_at=cut.completed_at,
                 )
             )
@@ -106,6 +107,7 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
     # and nothing is persisted when any error is found.
     errors: list[dict] = []
     seen: dict[str, int] = {}
+    segment_field_errors = 0
     for i, seg in enumerate(payload.segments):
         if seg.id in seen:
             errors.append(
@@ -121,6 +123,7 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                     f"{payload.roll_length}",
                 )
             )
+            segment_field_errors += 1
         elif seg.length + seg.allowance > payload.roll_length:
             # The delivered length alone fits; the allowance is what pushes
             # the actual cutting length past the roll, so blame that input.
@@ -131,6 +134,39 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                     f"exceeds usable roll length {payload.roll_length}",
                 )
             )
+            segment_field_errors += 1
+
+    # Kit groups: all members of one kit must fit a single roll together,
+    # counting every segment's cut length and the kerfs between the kit's
+    # own segments. A kit that cannot fit one roll is rejected up front;
+    # the error is put on every member's kit-number input (with the exact
+    # overflow in millimetres) and nothing is persisted. Individual
+    # segment errors are reported first and skip this aggregate check.
+    if segment_field_errors == 0:
+        kit_members: dict[int, list[int]] = {}
+        for i, seg in enumerate(payload.segments):
+            if seg.kit_no is not None:
+                kit_members.setdefault(seg.kit_no, []).append(i)
+        for kit_no, members in kit_members.items():
+            cut_sum = sum(
+                payload.segments[i].length + payload.segments[i].allowance
+                for i in members
+            )
+            needed = cut_sum + payload.kerf_width * (len(members) - 1)
+            if needed > payload.roll_length:
+                overflow = needed - payload.roll_length
+                for i in members:
+                    errors.append(
+                        _err(
+                            ["segments", i, "kit_no"],
+                            f"kit {kit_no} needs {needed} mm in one roll "
+                            f"(cut lengths {cut_sum} mm + "
+                            f"{len(members) - 1} kerfs of "
+                            f"{payload.kerf_width} mm) but the roll length is "
+                            f"{payload.roll_length} mm; the kit overflows by "
+                            f"{overflow} mm",
+                        )
+                    )
 
     # Provenance check: an adjustment request must name an existing plan.
     # A missing source is a field-level 422 (the form keeps all edits and
@@ -153,7 +189,10 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
     solution = solve(
         payload.roll_length,
         payload.kerf_width,
-        [Segment(s.id, s.length, s.allowance) for s in payload.segments],
+        [
+            Segment(s.id, s.length, s.allowance, s.kit_no)
+            for s in payload.segments
+        ],
     )
 
     plan = Plan(
@@ -172,8 +211,9 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
             used_length=roll.used_length,
             leftover=roll.leftover,
         )
-        for cut_pos, (sid, length, allowance) in enumerate(
-            zip(roll.segment_ids, roll.lengths, roll.allowances), start=1
+        for cut_pos, (sid, length, allowance, kit_no) in enumerate(
+            zip(roll.segment_ids, roll.lengths, roll.allowances, roll.kit_nos),
+            start=1,
         ):
             db_roll.cuts.append(
                 Cut(
@@ -181,6 +221,7 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                     segment_id=sid,
                     length=length,
                     allowance=allowance,
+                    kit_no=kit_no,
                 )
             )
         plan.rolls.append(db_roll)
