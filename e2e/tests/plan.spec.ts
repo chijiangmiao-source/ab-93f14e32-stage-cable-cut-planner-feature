@@ -454,8 +454,13 @@ test.describe('roll cutting planner', () => {
     test('a kit that cannot fit one roll is located on every member kit input and nothing is created', async ({
       page,
     }) => {
-      // baseline: how many plans already exist in the shared history
+      // baseline: how many plans already exist in the shared history;
+      // the list loads asynchronously, so wait for the table (or the
+      // empty-state note) before counting or the baseline is meaningless
       await page.goto('/plans')
+      await expect(
+        page.locator('.plan-table').or(page.getByText('暂无方案')),
+      ).toBeVisible()
       const before = await page.locator('.plan-table tbody tr').count()
 
       await page.goto('/')
