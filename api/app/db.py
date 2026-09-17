@@ -53,3 +53,9 @@ def run_migrations():
                         "ADD COLUMN allowance INTEGER NOT NULL DEFAULT 0"
                     )
                 )
+            columns.add("allowance")
+        # Bundle ids stay NULL for historical cuts: unbundled segments pack
+        # exactly as they always did.
+        if "bundle" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE cuts ADD COLUMN bundle VARCHAR(32)"))

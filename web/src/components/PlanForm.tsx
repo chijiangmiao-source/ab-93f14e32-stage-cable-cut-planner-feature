@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ApiError, createPlan } from '../api'
 import { groupErrors } from '../errors'
 import {
+  BUNDLE_PATTERN,
   MAX_ALLOWANCE,
   MAX_SEGMENTS,
   addRow,
@@ -16,7 +17,7 @@ import type { SegmentRow } from '../segmentRows'
 export interface PlanFormInitial {
   roll_length: number
   kerf_width: number
-  segments: { id: string; length: number; allowance?: number }[]
+  segments: { id: string; length: number; allowance?: number; bundle?: string | null }[]
 }
 
 interface PlanFormProps {
@@ -46,7 +47,7 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
   const [rows, setRows] = useState<SegmentRow[]>(() =>
     initial
       ? initial.segments.map((s) =>
-          makeRow(s.id, String(s.length), String(s.allowance ?? 0)),
+          makeRow(s.id, String(s.length), String(s.allowance ?? 0), s.bundle ?? ''),
         )
       : [
           makeRow('S1', '600'),
@@ -109,15 +110,29 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
       }
       return value
     }
+    // Optional bundle id: blank means the segment packs independently.
+    // Segments sharing one bundle id are kept on the same roll.
+    const parseBundle = (raw: string, key: string): string | undefined => {
+      const value = raw.trim()
+      if (!value) return undefined
+      if (!BUNDLE_PATTERN.test(value)) {
+        push(key, '套组编号须为 1–32 位字母或数字（可含 -、_），且以字母数字开头')
+        return undefined
+      }
+      return value
+    }
     const roll_length = parseLen(rollLength, 'roll_length')
     const kerf_width = parseLen(kerfWidth, 'kerf_width')
     const segments = rows.map((row, i) => {
       const id = row.id.trim()
       if (!id) push(`segments.${i}.id`, '编号不能为空')
+      const bundle = parseBundle(row.bundle, `segments.${i}.bundle`)
       return {
         id,
         length: parseLen(row.length, `segments.${i}.length`),
         allowance: parseAllowance(row.allowance, `segments.${i}.allowance`),
+        // Omitted entirely when blank, matching legacy clients.
+        ...(bundle !== undefined ? { bundle } : {}),
       }
     })
     if (local.size > 0) {
@@ -284,6 +299,20 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
                 }
               />
               <FieldErrors messages={fieldError(`segments.${i}.allowance`)} />
+            </label>
+            <label>
+              套组（可空）
+              <input
+                data-testid={`segment-bundle-${i}`}
+                type="text"
+                maxLength={32}
+                placeholder="同号同卷"
+                value={row.bundle}
+                onChange={(e) =>
+                  setRows(updateRow(rows, row.key, { bundle: e.target.value }))
+                }
+              />
+              <FieldErrors messages={fieldError(`segments.${i}.bundle`)} />
             </label>
             <button
               type="button"

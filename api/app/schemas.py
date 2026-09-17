@@ -15,6 +15,9 @@ class SegmentIn(BaseModel):
     length: int = Field(ge=MIN_LEN, le=MAX_LEN)
     # Optional end-trim allowance; omitted means 0 (legacy clients).
     allowance: int = Field(default=0, ge=MIN_ALLOWANCE, le=MAX_ALLOWANCE)
+    # Optional bundle id: segments sharing one must stay on the same roll.
+    # Omitted (or null) means independent packing, exactly as before.
+    bundle: str | None = Field(default=None, pattern=ID_PATTERN)
 
 
 class PlanCreate(BaseModel):
@@ -30,6 +33,9 @@ class SegmentOut(BaseModel):
     id: str
     length: int
     allowance: int
+    # Bundle id when the segment was grouped; null for independent segments
+    # and for every historical record.
+    bundle: str | None = None
     # None while the segment is waiting to be cut; old plans keep None.
     completed_at: datetime | None = None
 

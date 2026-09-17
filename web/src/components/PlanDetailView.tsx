@@ -16,12 +16,13 @@ function formatTime(iso: string): string {
 
 /** Every segment shows delivery, allowance and actual cut length, so a
  * zero (or unset) allowance is stated explicitly instead of hiding the
- * cut length behind a single number. */
+ * cut length behind a single number. Grouped segments also carry their
+ * bundle id right after the cutting-order entry. */
 function formatSegment(seg: SegmentOut): string {
-  return (
+  const base =
     `${seg.id}（交付 ${seg.length} mm + 余量 ${seg.allowance} mm = ` +
     `下料 ${seg.length + seg.allowance} mm）`
-  )
+  return seg.bundle ? `${base}［套组 ${seg.bundle}］` : base
 }
 
 function SegmentStatus({

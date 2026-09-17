@@ -60,11 +60,23 @@ describe('updateRow', () => {
     expect(rows[0].allowance).toBe('50')
     expect(rows[0].length).toBe('100')
   })
+
+  it('patches the bundle field', () => {
+    const a = makeRow('S1', '100')
+    const rows = updateRow([a], a.key, { bundle: 'G1' })
+    expect(rows[0].bundle).toBe('G1')
+    expect(rows[0].allowance).toBe('')
+  })
 })
 
 describe('makeRow', () => {
   it('defaults the allowance to blank (treated as zero)', () => {
     expect(makeRow('S1', '100').allowance).toBe('')
     expect(makeRow('S1', '100', '25').allowance).toBe('25')
+  })
+
+  it('defaults the bundle to blank (no bundle)', () => {
+    expect(makeRow('S1', '100').bundle).toBe('')
+    expect(makeRow('S1', '100', '25', 'G1').bundle).toBe('G1')
   })
 })

@@ -19,7 +19,7 @@ function makePlan(overrides: Partial<PlanOut> = {}): PlanOut {
     rolls: [
       {
         position: 1,
-        segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
+        segments: [{ id: 'A', length: 600, allowance: 0, bundle: null, completed_at: null }],
         kerf_count: 0,
         used_length: 600,
         leftover: 400,
@@ -28,8 +28,8 @@ function makePlan(overrides: Partial<PlanOut> = {}): PlanOut {
       {
         position: 2,
         segments: [
-          { id: 'B', length: 590, allowance: 0, completed_at: null },
-          { id: 'C', length: 400, allowance: 0, completed_at: null },
+          { id: 'B', length: 590, allowance: 0, bundle: null, completed_at: null },
+          { id: 'C', length: 400, allowance: 0, bundle: null, completed_at: null },
         ],
         kerf_count: 1,
         used_length: 1000,
@@ -89,7 +89,7 @@ describe('PlanDetailView', () => {
       rolls: [
         {
           position: 1,
-          segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
+          segments: [{ id: 'A', length: 600, allowance: 0, bundle: null, completed_at: null }],
           kerf_count: 0,
           used_length: 600,
           leftover: 400,
@@ -102,9 +102,10 @@ describe('PlanDetailView', () => {
               id: 'B',
               length: 590,
               allowance: 0,
+              bundle: null,
               completed_at: '2026-09-12T09:00:00Z',
             },
-            { id: 'C', length: 400, allowance: 0, completed_at: null },
+            { id: 'C', length: 400, allowance: 0, bundle: null, completed_at: null },
           ],
           kerf_count: 1,
           used_length: 1000,
@@ -153,8 +154,8 @@ describe('PlanDetailView', () => {
           ...makePlan().rolls[1],
           completed_count: 1,
           segments: [
-            { id: 'B', length: 590, allowance: 0, completed_at: '2026-09-12T09:00:00Z' },
-            { id: 'C', length: 400, allowance: 0, completed_at: null },
+            { id: 'B', length: 590, allowance: 0, bundle: null, completed_at: '2026-09-12T09:00:00Z' },
+            { id: 'C', length: 400, allowance: 0, bundle: null, completed_at: null },
           ],
         },
       ],
@@ -190,7 +191,7 @@ describe('PlanDetailView', () => {
         {
           position: 1,
           segments: [
-            { id: 'A', length: 600, allowance: 0, completed_at: '2026-09-12T09:00:00Z' },
+            { id: 'A', length: 600, allowance: 0, bundle: null, completed_at: '2026-09-12T09:00:00Z' },
           ],
           kerf_count: 0,
           used_length: 600,
@@ -200,8 +201,8 @@ describe('PlanDetailView', () => {
         {
           position: 2,
           segments: [
-            { id: 'B', length: 590, allowance: 0, completed_at: '2026-09-12T09:01:00Z' },
-            { id: 'C', length: 400, allowance: 0, completed_at: '2026-09-12T09:02:00Z' },
+            { id: 'B', length: 590, allowance: 0, bundle: null, completed_at: '2026-09-12T09:01:00Z' },
+            { id: 'C', length: 400, allowance: 0, bundle: null, completed_at: '2026-09-12T09:02:00Z' },
           ],
           kerf_count: 1,
           used_length: 1000,
@@ -249,7 +250,7 @@ describe('PlanDetailView', () => {
       rolls: [
         {
           position: 1,
-          segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
+          segments: [{ id: 'A', length: 600, allowance: 0, bundle: null, completed_at: null }],
           kerf_count: 0,
           used_length: 600,
           leftover: 400,
@@ -257,7 +258,7 @@ describe('PlanDetailView', () => {
         },
         {
           position: 2,
-          segments: [{ id: 'B', length: 590, allowance: 0, completed_at: null }],
+          segments: [{ id: 'B', length: 590, allowance: 0, bundle: null, completed_at: null }],
           kerf_count: 0,
           used_length: 590,
           leftover: 410,
@@ -265,7 +266,7 @@ describe('PlanDetailView', () => {
         },
         {
           position: 3,
-          segments: [{ id: 'C', length: 400, allowance: 50, completed_at: null }],
+          segments: [{ id: 'C', length: 400, allowance: 50, bundle: null, completed_at: null }],
           kerf_count: 0,
           used_length: 450,
           leftover: 550,
@@ -282,5 +283,62 @@ describe('PlanDetailView', () => {
     expect(text).toContain(
       '450（下料合计 = 交付 400 mm + 余量 50 mm）+ 0 × 10（锯口）= 450 mm ≤ 1000 mm；余料 550 mm；锯口 0 次',
     )
+  })
+
+  it('shows bundle ids beside the cutting order, none for loose segments', () => {
+    const bundled = makePlan({
+      rolls_used: 3,
+      total_kerf_count: 1,
+      total_leftover: 110,
+      rolls: [
+        {
+          position: 1,
+          segments: [
+            { id: 'A', length: 40, allowance: 0, bundle: 'G1', completed_at: null },
+            { id: 'B', length: 40, allowance: 0, bundle: 'G1', completed_at: null },
+          ],
+          kerf_count: 1,
+          used_length: 90,
+          leftover: 10,
+          completed_count: 0,
+        },
+        {
+          position: 2,
+          segments: [
+            { id: 'C', length: 50, allowance: 0, bundle: null, completed_at: null },
+          ],
+          kerf_count: 0,
+          used_length: 50,
+          leftover: 50,
+          completed_count: 0,
+        },
+        {
+          position: 3,
+          segments: [
+            { id: 'D', length: 50, allowance: 0, bundle: null, completed_at: null },
+          ],
+          kerf_count: 0,
+          used_length: 50,
+          leftover: 50,
+          completed_count: 0,
+        },
+      ],
+    })
+    const { container } = renderView(bundled)
+
+    // The bundle id rides next to the original cutting-order entries.
+    const orderLines = container.querySelectorAll('.cutting-order')
+    expect(orderLines[0].textContent).toContain(
+      'A（交付 40 mm + 余量 0 mm = 下料 40 mm）［套组 G1］ → B（交付 40 mm + 余量 0 mm = 下料 40 mm）［套组 G1］',
+    )
+    // Unbundled rolls keep the plain cutting order with no bundle tag.
+    expect(orderLines[1].textContent).toContain('C（交付 50 mm + 余量 0 mm = 下料 50 mm）')
+    expect(orderLines[1].textContent).not.toContain('套组')
+    expect(orderLines[2].textContent).not.toContain('套组')
+
+    // Progress stays per segment: roll 1 still offers its two cuts one by one.
+    expect(screen.getByTestId('roll-progress-1')).toHaveTextContent('已完成 0 / 2 段')
+    expect(screen.getByTestId('cut-1-1')).toHaveClass('cut-status-next')
+    expect(screen.getByTestId('cut-1-2')).toHaveClass('cut-status-pending')
   })
 })

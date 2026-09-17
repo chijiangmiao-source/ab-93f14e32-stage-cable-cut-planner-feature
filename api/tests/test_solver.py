@@ -134,6 +134,108 @@ def test_oversized_cut_length_rejected():
         solve(100, 5, [Segment("A", 100, 1)])
 
 
+# ---------------------------------------------------------------------------
+# Bundles: segments sharing a bundle id never split across rolls.
+# ---------------------------------------------------------------------------
+
+
+def test_bundle_packs_together_even_when_splitting_is_better():
+    # Unconstrained optimum: [A,C],[B,D] (2 rolls). Bundling A with B
+    # forces them together, so C and D can no longer share a roll.
+    segs = [
+        Segment("A", 40, bundle="G1"),
+        Segment("B", 40, bundle="G1"),
+        Segment("C", 50),
+        Segment("D", 50),
+    ]
+    sol = solve(100, 10, segs)
+    assert sol.rolls_used == 3
+    assert ids_rolls(sol) == (("A", "B"), ("C",), ("D",))
+
+    # The very same segments without bundles keep the legacy 2-roll plan.
+    plain = solve(
+        100,
+        10,
+        [Segment("A", 40), Segment("B", 40), Segment("C", 50), Segment("D", 50)],
+    )
+    assert plain.rolls_used == 2
+    assert ids_rolls(plain) == (("A", "C"), ("B", "D"))
+
+
+def test_bundle_roll_math_counts_allowance_and_internal_kerfs():
+    sol = solve(
+        100,
+        10,
+        [
+            Segment("B", 35, 5, "G1"),
+            Segment("A", 40, 0, "G1"),
+            Segment("C", 50),
+        ],
+    )
+    assert ids_rolls(sol) == (("A", "B"), ("C",))
+    roll = sol.rolls[0]
+    assert roll.bundles == ("G1", "G1")
+    # cut lengths 40 + 40 (35+5) and one kerf inside the bundle
+    assert roll.used_length == 40 + 40 + 10
+    assert roll.leftover == 10
+    assert sol.rolls[1].bundles == (None,)
+    assert sol.total_kerf_count == 1
+
+
+def test_bundle_shares_roll_with_independent_segments():
+    # The whole bundle plus a loose segment fit one roll together.
+    sol = solve(
+        200,
+        10,
+        [Segment("A", 40, bundle="G"), Segment("B", 40, bundle="G"), Segment("C", 50)],
+    )
+    assert sol.rolls_used == 1
+    assert ids_rolls(sol) == (("A", "B", "C"),)
+    assert sol.rolls[0].bundles == ("G", "G", None)
+    assert sol.rolls[0].used_length == 40 + 40 + 50 + 2 * 10
+
+
+def test_single_member_bundle_behaves_like_unbundled():
+    bundled = solve(100, 10, [Segment("A", 50, bundle="Solo"), Segment("B", 50)])
+    plain = solve(100, 10, [Segment("A", 50), Segment("B", 50)])
+    assert ids_rolls(bundled) == ids_rolls(plain)
+    assert bundled.rolls[0].bundles == ("Solo",)
+
+
+def test_unfittable_bundle_rejected():
+    # 60 + 60 + one kerf of 10 = 130 > 100: the bundle can never fit.
+    with pytest.raises(ValueError, match="bundle 'G9'"):
+        solve(100, 10, [Segment("A", 60, bundle="G9"), Segment("B", 60, bundle="G9")])
+
+
+def test_unfittable_bundle_rejected_even_with_allowance():
+    # cut lengths 60 + 55 (50+5) + kerf 10 = 125 > 120
+    with pytest.raises(ValueError):
+        solve(
+            120,
+            10,
+            [Segment("A", 60, bundle="G"), Segment("B", 50, 5, "G")],
+        )
+
+
+def test_bundle_ids_do_not_leak_across_groups():
+    sol = solve(
+        100,
+        10,
+        [
+            Segment("A", 40, bundle="G1"),
+            Segment("B", 40, bundle="G2"),
+            Segment("C", 40, bundle="G1"),
+            Segment("D", 40, bundle="G2"),
+        ],
+    )
+    # G1 = {A, C}, G2 = {B, D}; each pair fits one roll (40+40+10).
+    assert sol.rolls_used == 2
+    assert ids_rolls(sol) == (("A", "C"), ("B", "D"))
+    assert sol.rolls[0].bundles == ("G1", "G1")
+    assert sol.rolls[1].bundles == ("G2", "G2")
+
+
 def test_twelve_segments_run_quickly():
     segs = [Segment(f"S{i:02d}", 97 + 3 * i) for i in range(12)]
     sol = solve(400, 11, segs)
@@ -165,16 +267,33 @@ def _brute_force(roll_length, kerf, segments):
     ids = [s.sid for s in segments]
     cuts = [s.cut_length for s in segments]
 
+    # Atomic units: segments sharing a bundle id move together.
+    groups: dict[str, list[int]] = {}
+    for i, s in enumerate(segments):
+        if s.bundle is not None:
+            groups.setdefault(s.bundle, []).append(i)
+    units = []
+    grouped = set()
+    for members in groups.values():
+        units.append(frozenset(members))
+        grouped.update(members)
+    for i in range(n):
+        if i not in grouped:
+            units.append(frozenset({i}))
+
     def fits(block):
         return sum(cuts[i] for i in block) + kerf * (len(block) - 1) <= roll_length
 
     best_key = None
     best_canonical = None
-    for part in _partitions(n):
-        if not all(fits(b) for b in part):
+    for unit_part in _partitions(len(units)):
+        blocks = [
+            frozenset().union(*(units[u] for u in block)) for block in unit_part
+        ]
+        if not all(fits(b) for b in blocks):
             continue
-        canonical = tuple(sorted(tuple(sorted(ids[i] for i in b)) for b in part))
-        key = (len(part), canonical)
+        canonical = tuple(sorted(tuple(sorted(ids[i] for i in b)) for b in blocks))
+        key = (len(blocks), canonical)
         if best_key is None or key < best_key:
             best_key = key
             best_canonical = canonical
@@ -195,5 +314,59 @@ def test_matches_brute_force(seed):
         segments.append(Segment(f"S{i}", length, allowance))
     sol = solve(roll_length, kerf, segments)
     expected = _brute_force(roll_length, kerf, segments)
+    assert ids_rolls(sol) == expected
+    assert sol.rolls_used == len(expected)
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_matches_brute_force_with_bundles(seed):
+    rng = random.Random(1000 + seed)
+    n = rng.randint(2, 8)
+    roll_length = rng.randint(30, 120)
+    kerf = rng.randint(1, 20)
+    segments = []
+    for i in range(n):
+        length = rng.randint(1, roll_length)
+        allowance = rng.randint(0, roll_length - length)
+        segments.append(Segment(f"S{i}", length, allowance))
+
+    # Assign random bundles, then unbundle any group whose cut lengths plus
+    # internal kerfs cannot fit one roll (the API rejects those with 422).
+    names = ["G1", "G2", "G3"]
+    bundled = [
+        Segment(s.sid, s.length, s.allowance, rng.choice([None, None, *names]))
+        for s in segments
+    ]
+    for name in names:
+        members = [s for s in bundled if s.bundle == name]
+        needed = sum(s.cut_length for s in members) + kerf * (len(members) - 1)
+        if members and needed > roll_length:
+            bundled = [
+                Segment(
+                    s.sid,
+                    s.length,
+                    s.allowance,
+                    None if s.bundle == name else s.bundle,
+                )
+                for s in bundled
+            ]
+    # Guarantee every instance exercises at least one bundle: pair up the two
+    # shortest segments whenever they can share a roll.
+    if all(s.bundle is None for s in bundled):
+        pair = sorted(bundled, key=lambda s: s.cut_length)[:2]
+        if sum(s.cut_length for s in pair) + kerf <= roll_length:
+            paired = {s.sid for s in pair}
+            bundled = [
+                Segment(
+                    s.sid,
+                    s.length,
+                    s.allowance,
+                    "GZ" if s.sid in paired else s.bundle,
+                )
+                for s in bundled
+            ]
+
+    sol = solve(roll_length, kerf, bundled)
+    expected = _brute_force(roll_length, kerf, bundled)
     assert ids_rolls(sol) == expected
     assert sol.rolls_used == len(expected)

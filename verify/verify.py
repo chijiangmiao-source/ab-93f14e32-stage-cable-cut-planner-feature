@@ -406,6 +406,104 @@ def main():
           before_count >= 0 and after_count == before_count,
           f"before={before_count} after={after_count}")
 
+    # --- bundles: grouped segments never split across rolls ------------------
+    # Without bundles the optimum here is [A,C],[B,D] (2 rolls); bundling A
+    # with B forces them together, so C and D can no longer share a roll.
+    case5 = {
+        "roll_length": 100,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 40, "bundle": "G1"},
+            {"id": "B", "length": 35, "allowance": 5, "bundle": "G1"},
+            {"id": "C", "length": 50},
+            {"id": "D", "length": 50},
+        ],
+    }
+    status, plan5 = request("POST", f"{WEB_URL}/api/plans", case5)
+    check("bundle case created", status == 201 and isinstance(plan5, dict), str(plan5))
+    if not isinstance(plan5, dict):
+        sys.exit(1)
+    check("bundle keeps A and B on one roll: [[A,B],[C],[D]]",
+          [[s["id"] for s in r["segments"]] for r in plan5.get("rolls", [])]
+          == [["A", "B"], ["C"], ["D"]],
+          str(plan5.get("rolls")))
+    check("bundle ids returned per segment, null for loose ones",
+          [[s.get("bundle") for s in r["segments"]] for r in plan5.get("rolls", [])]
+          == [["G1", "G1"], [None], [None]],
+          str(plan5.get("rolls")))
+    check("bundle roll 1 counts allowances and the intra-bundle kerf",
+          plan5["rolls"][0]["used_length"] == 40 + 40 + 10
+          and plan5["rolls"][0]["kerf_count"] == 1,
+          str(plan5["rolls"][0]))
+    for roll in plan5.get("rolls", []):
+        cut_sum = sum(s["length"] + s["allowance"] for s in roll["segments"])
+        total = cut_sum + roll["kerf_count"] * plan5["kerf_width"] + roll["leftover"]
+        check(f"bundle roll {roll['position']} closes: cut lengths + kerfs + leftover = roll length",
+              total == plan5["roll_length"]
+              and roll["used_length"] + roll["leftover"] == plan5["roll_length"])
+
+    status, fetched5 = request("GET", f"{WEB_URL}/api/plans/{plan5['id']}")
+    check("bundle plan detail survives a refetch unchanged",
+          status == 200 and fetched5 == plan5)
+
+    # the same segments without bundles keep the legacy 2-roll packing
+    case5_plain = {
+        "roll_length": 100,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 40},
+            {"id": "B", "length": 35, "allowance": 5},
+            {"id": "C", "length": 50},
+            {"id": "D", "length": 50},
+        ],
+    }
+    status, plan5p = request("POST", f"{API_URL}/api/plans", case5_plain)
+    check("unbundled twin created", status == 201 and isinstance(plan5p, dict),
+          str(plan5p))
+    if not isinstance(plan5p, dict):
+        sys.exit(1)
+    check("unbundled twin keeps the legacy packing [[A,C],[B,D]]",
+          [[s["id"] for s in r["segments"]] for r in plan5p.get("rolls", [])]
+          == [["A", "C"], ["B", "D"]],
+          str(plan5p.get("rolls")))
+    check("unbundled segments report a null bundle",
+          all(s.get("bundle") is None
+              for r in plan5p.get("rolls", []) for s in r["segments"]))
+    check("earlier no-bundle plans report null bundles too",
+          all(s.get("bundle") is None
+              for p in (plan1, plan2, plan3, plan4)
+              for r in p.get("rolls", []) for s in r["segments"]))
+
+    # --- unfittable bundle: located 422 with the excess, nothing persisted ---
+    status, before = request("GET", f"{API_URL}/api/plans")
+    before_count = len(before) if status == 200 and isinstance(before, list) else -1
+
+    bad_bundle = {
+        "roll_length": 100,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 60, "bundle": "G9"},
+            {"id": "B", "length": 65, "bundle": "G9"},
+            {"id": "C", "length": 90},
+        ],
+    }
+    status, body = request("POST", f"{WEB_URL}/api/plans", bad_bundle)
+    check("unfittable bundle -> 422", status == 422, str(body))
+    locs = locs_of(body)
+    check("bundle error locates every member's bundle input",
+          ["segments", 0, "bundle"] in locs and ["segments", 1, "bundle"] in locs,
+          str(body))
+    msgs = (" ".join(e.get("msg", "") for e in body.get("detail", []))
+            if isinstance(body, dict) else "")
+    check("bundle error states the excess in mm (60 + 65 + 10 - 100 = 35)",
+          "by 35 mm" in msgs and "G9" in msgs, str(body))
+
+    status, after = request("GET", f"{API_URL}/api/plans")
+    after_count = len(after) if status == 200 and isinstance(after, list) else -1
+    check("unfittable bundle persisted nothing",
+          before_count >= 0 and after_count == before_count,
+          f"before={before_count} after={after_count}")
+
     print()
     if failures:
         print(f"VERIFY FAILED: {len(failures)} check(s) failed")

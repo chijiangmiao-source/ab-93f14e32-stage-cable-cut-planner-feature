@@ -406,4 +406,79 @@ test.describe('roll cutting planner', () => {
     await expect(page.getByTestId('segment-length-1')).toHaveValue('300')
     await expect(page.getByTestId('segment-length-2')).toHaveValue('200')
   })
+
+  test('bundled segments stay on one roll and the bundle labels survive a reload', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.getByTestId('roll-length').fill('100')
+    await page.getByTestId('kerf-width').fill('10')
+    await page.getByTestId('segment-id-0').fill('A')
+    await page.getByTestId('segment-length-0').fill('40')
+    await page.getByTestId('segment-bundle-0').fill('G1')
+    await page.getByTestId('segment-id-1').fill('B')
+    await page.getByTestId('segment-length-1').fill('40')
+    await page.getByTestId('segment-bundle-1').fill('G1')
+    await page.getByTestId('segment-id-2').fill('C')
+    await page.getByTestId('segment-length-2').fill('50')
+    await page.getByTestId('add-segment').click()
+    await page.getByTestId('segment-id-3').fill('D')
+    await page.getByTestId('segment-length-3').fill('50')
+    await page.getByTestId('submit-plan').click()
+
+    // Without the bundle the optimum would be [A,C],[B,D]; the G1 bundle
+    // forces A and B onto one roll, so C and D get their own rolls.
+    await expect(page).toHaveURL(/\/plans\/\d+$/)
+    await expect(page.getByText('第 1 卷')).toBeVisible()
+    await expect(page.getByText('第 3 卷')).toBeVisible()
+    const orderLines = page.locator('.cutting-order')
+    await expect(orderLines.nth(0)).toContainText(
+      'A（交付 40 mm + 余量 0 mm = 下料 40 mm）［套组 G1］ → B（交付 40 mm + 余量 0 mm = 下料 40 mm）［套组 G1］',
+    )
+    await expect(orderLines.nth(1)).toContainText('C（交付 50 mm + 余量 0 mm = 下料 50 mm）')
+    await expect(orderLines.nth(1)).not.toContainText('套组')
+    await expect(orderLines.nth(2)).toContainText('D（交付 50 mm + 余量 0 mm = 下料 50 mm）')
+    await expect(page.locator('.roll-math').filter({ hasText: /余料 10 mm/ })).toBeVisible()
+
+    // reload: the persisted plan shows the identical roll order and bundle ids
+    await page.reload()
+    const reloaded = page.locator('.cutting-order')
+    await expect(reloaded.nth(0)).toContainText(
+      'A（交付 40 mm + 余量 0 mm = 下料 40 mm）［套组 G1］ → B（交付 40 mm + 余量 0 mm = 下料 40 mm）［套组 G1］',
+    )
+    await expect(reloaded.nth(1)).toContainText('C（交付 50 mm + 余量 0 mm = 下料 50 mm）')
+    await expect(reloaded.nth(2)).toContainText('D（交付 50 mm + 余量 0 mm = 下料 50 mm）')
+    await expect(page.getByText('第 3 卷')).toBeVisible()
+  })
+
+  test('an unfittable bundle flags every member input with the excess and keeps the form', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.getByTestId('roll-length').fill('100')
+    await page.getByTestId('kerf-width').fill('10')
+    await page.getByTestId('segment-id-0').fill('A')
+    await page.getByTestId('segment-length-0').fill('60')
+    await page.getByTestId('segment-bundle-0').fill('G9')
+    await page.getByTestId('segment-id-1').fill('B')
+    await page.getByTestId('segment-length-1').fill('65')
+    await page.getByTestId('segment-bundle-1').fill('G9')
+    await page.getByTestId('segment-id-2').fill('C')
+    await page.getByTestId('segment-length-2').fill('90')
+    await page.getByTestId('submit-plan').click()
+
+    // The bundle needs 60 + 65 + 10 = 135 mm: both bundle inputs are flagged
+    // with the 35 mm excess, no plan is created and every input stays put.
+    await expect(
+      page
+        .locator('.field-error')
+        .filter({ hasText: /bundle 'G9' needs 135 mm .* exceeds usable roll length 100 by 35 mm/ }),
+    ).toHaveCount(2)
+    await expect(page).toHaveURL(/\/$/)
+    await expect(page.getByTestId('segment-bundle-0')).toHaveValue('G9')
+    await expect(page.getByTestId('segment-bundle-1')).toHaveValue('G9')
+    await expect(page.getByTestId('segment-length-0')).toHaveValue('60')
+    await expect(page.getByTestId('segment-length-1')).toHaveValue('65')
+    await expect(page.getByTestId('segment-length-2')).toHaveValue('90')
+  })
 })

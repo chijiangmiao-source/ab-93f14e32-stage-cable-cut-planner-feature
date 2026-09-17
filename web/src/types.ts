@@ -2,6 +2,9 @@ export interface SegmentOut {
   id: string
   length: number
   allowance: number
+  /** Bundle id when the segment was grouped; null for independent segments
+   *  and for every historical record. */
+  bundle: string | null
   /** ISO timestamp once this segment has actually been cut; null otherwise. */
   completed_at: string | null
 }
@@ -44,6 +47,8 @@ export interface SegmentInput {
   id: string
   length: number
   allowance?: number
+  /** Optional bundle id; omitted means the segment packs independently. */
+  bundle?: string
 }
 
 export interface PlanCreateInput {

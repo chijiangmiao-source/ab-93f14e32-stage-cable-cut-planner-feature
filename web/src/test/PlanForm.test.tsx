@@ -122,3 +122,98 @@ describe('PlanForm adjustment flow', () => {
     expect(body.segments[1].length).toBe(380)
   })
 })
+
+describe('PlanForm bundle groups', () => {
+  beforeEach(() => {
+    createPlanMock.mockReset()
+  })
+
+  it('renders a blank bundle input per row by default', () => {
+    renderForm()
+    expect(screen.getByTestId('segment-bundle-0')).toHaveValue('')
+    expect(screen.getByTestId('segment-bundle-1')).toHaveValue('')
+    expect(screen.getByTestId('segment-bundle-2')).toHaveValue('')
+  })
+
+  it('carries bundle ids from the source plan verbatim', () => {
+    renderForm({
+      initial: {
+        roll_length: 100,
+        kerf_width: 10,
+        segments: [
+          { id: 'A', length: 40, bundle: 'G1' },
+          { id: 'B', length: 40, bundle: 'G1' },
+          { id: 'C', length: 50 },
+        ],
+      },
+      sourcePlanId: 5,
+    })
+    expect(screen.getByTestId('segment-bundle-0')).toHaveValue('G1')
+    expect(screen.getByTestId('segment-bundle-1')).toHaveValue('G1')
+    expect(screen.getByTestId('segment-bundle-2')).toHaveValue('')
+  })
+
+  it('sends bundle ids for filled rows and omits blank ones', async () => {
+    createPlanMock.mockResolvedValueOnce({ id: 77 })
+    renderForm()
+    fireEvent.change(screen.getByTestId('segment-bundle-0'), {
+      target: { value: 'G1' },
+    })
+    fireEvent.change(screen.getByTestId('segment-bundle-1'), {
+      target: { value: 'G1' },
+    })
+    fireEvent.click(screen.getByTestId('submit-plan'))
+
+    await waitFor(() => expect(createPlanMock).toHaveBeenCalledTimes(1))
+    const body = createPlanMock.mock.calls[0][0]
+    expect(body.segments[0].bundle).toBe('G1')
+    expect(body.segments[1].bundle).toBe('G1')
+    expect(body.segments[2]).not.toHaveProperty('bundle')
+  })
+
+  it('rejects a malformed bundle id locally without calling the api', () => {
+    renderForm()
+    fireEvent.change(screen.getByTestId('segment-bundle-0'), {
+      target: { value: 'bad bundle' },
+    })
+    fireEvent.click(screen.getByTestId('submit-plan'))
+
+    expect(createPlanMock).not.toHaveBeenCalled()
+    expect(screen.getByText(/套组编号须为/)).toBeInTheDocument()
+    // the invalid input stays in place for correction
+    expect(screen.getByTestId('segment-bundle-0')).toHaveValue('bad bundle')
+  })
+
+  it('maps a server bundle error back to the bundle inputs and keeps the form', async () => {
+    createPlanMock.mockRejectedValueOnce(
+      new ApiError(422, '输入校验未通过', [
+        {
+          loc: ['segments', 0, 'bundle'],
+          msg: "bundle 'G1' needs 135 mm (cut lengths + 1 kerfs) and exceeds usable roll length 100 by 35 mm",
+          type: 'value_error',
+        },
+        {
+          loc: ['segments', 1, 'bundle'],
+          msg: "bundle 'G1' needs 135 mm (cut lengths + 1 kerfs) and exceeds usable roll length 100 by 35 mm",
+          type: 'value_error',
+        },
+      ]),
+    )
+    renderForm()
+    fireEvent.change(screen.getByTestId('segment-bundle-0'), {
+      target: { value: 'G1' },
+    })
+    fireEvent.change(screen.getByTestId('segment-bundle-1'), {
+      target: { value: 'G1' },
+    })
+    fireEvent.click(screen.getByTestId('submit-plan'))
+
+    // both bundle inputs are flagged with the excess in millimetres
+    const flagged = await screen.findAllByText(/exceeds usable roll length 100 by 35 mm/)
+    expect(flagged).toHaveLength(2)
+    // the whole form is preserved for correction
+    expect(screen.getByTestId('segment-bundle-0')).toHaveValue('G1')
+    expect(screen.getByTestId('segment-bundle-1')).toHaveValue('G1')
+    expect(screen.getByTestId('segment-length-0')).toHaveValue(600)
+  })
+})

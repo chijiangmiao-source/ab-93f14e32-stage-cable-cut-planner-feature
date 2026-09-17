@@ -31,7 +31,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Roll Cutting Planner", version="1.2.0", lifespan=lifespan)
+app = FastAPI(title="Roll Cutting Planner", version="1.3.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -66,6 +66,7 @@ def _plan_to_out(plan: Plan) -> PlanOut:
                     id=cut.segment_id,
                     length=cut.length,
                     allowance=cut.allowance,
+                    bundle=cut.bundle,
                     completed_at=cut.completed_at,
                 )
             )
@@ -132,6 +133,37 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                 )
             )
 
+    # Bundle feasibility: segments sharing a bundle id are an indivisible
+    # unit, so the unit's cut lengths plus its internal kerfs must fit one
+    # roll. Every member's bundle input is flagged with the excess in mm.
+    bundle_members: dict[str, list[int]] = {}
+    for i, seg in enumerate(payload.segments):
+        if seg.bundle is not None:
+            bundle_members.setdefault(seg.bundle, []).append(i)
+    for bundle, idxs in bundle_members.items():
+        if len(idxs) < 2:
+            # A single-member bundle is already covered by the per-segment
+            # length/allowance checks above.
+            continue
+        needed = (
+            sum(
+                payload.segments[i].length + payload.segments[i].allowance
+                for i in idxs
+            )
+            + payload.kerf_width * (len(idxs) - 1)
+        )
+        if needed > payload.roll_length:
+            excess = needed - payload.roll_length
+            for i in idxs:
+                errors.append(
+                    _err(
+                        ["segments", i, "bundle"],
+                        f"bundle {bundle!r} needs {needed} mm (cut lengths + "
+                        f"{len(idxs) - 1} kerfs) and exceeds usable roll length "
+                        f"{payload.roll_length} by {excess} mm",
+                    )
+                )
+
     # Provenance check: an adjustment request must name an existing plan.
     # A missing source is a field-level 422 (the form keeps all edits and
     # prompts to re-pick), never a dangling link or a half-written record.
@@ -153,7 +185,10 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
     solution = solve(
         payload.roll_length,
         payload.kerf_width,
-        [Segment(s.id, s.length, s.allowance) for s in payload.segments],
+        [
+            Segment(s.id, s.length, s.allowance, s.bundle)
+            for s in payload.segments
+        ],
     )
 
     plan = Plan(
@@ -172,8 +207,9 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
             used_length=roll.used_length,
             leftover=roll.leftover,
         )
-        for cut_pos, (sid, length, allowance) in enumerate(
-            zip(roll.segment_ids, roll.lengths, roll.allowances), start=1
+        for cut_pos, (sid, length, allowance, bundle) in enumerate(
+            zip(roll.segment_ids, roll.lengths, roll.allowances, roll.bundles),
+            start=1,
         ):
             db_roll.cuts.append(
                 Cut(
@@ -181,6 +217,7 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                     segment_id=sid,
                     length=length,
                     allowance=allowance,
+                    bundle=bundle,
                 )
             )
         plan.rolls.append(db_roll)

@@ -319,3 +319,189 @@ def test_length_plus_allowance_exceeding_roll_located_at_allowance(client):
     # C fits, so no error points at it at all.
     assert all(loc[1] != 2 for loc in locs if len(loc) == 3)
     assert client.get("/api/plans").json() == []
+
+
+# ---------------------------------------------------------------------------
+# Bundle groups (套组编号): same-bundle segments never split across rolls.
+# ---------------------------------------------------------------------------
+
+
+def bundle_payload(**overrides):
+    payload = {
+        "roll_length": 100,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 40, "bundle": "G1"},
+            {"id": "B", "length": 40, "bundle": "G1"},
+            {"id": "C", "length": 50},
+            {"id": "D", "length": 50},
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_bundle_segments_never_split_across_rolls(client):
+    resp = client.post("/api/plans", json=bundle_payload())
+    assert resp.status_code == 201
+    plan = resp.json()
+    # The unconstrained optimum would be [A,C],[B,D]; the G1 bundle forces
+    # A and B together, so C and D can no longer share a roll.
+    assert plan["rolls_used"] == 3
+    assert [[s["id"] for s in r["segments"]] for r in plan["rolls"]] == [
+        ["A", "B"],
+        ["C"],
+        ["D"],
+    ]
+    # Bundle ids are persisted and returned per segment; unbundled = null.
+    assert [[s["bundle"] for s in r["segments"]] for r in plan["rolls"]] == [
+        ["G1", "G1"],
+        [None],
+        [None],
+    ]
+    # Capacity recomputes from cut lengths, kerfs and leftover per roll.
+    for roll in plan["rolls"]:
+        cut_sum = sum(s["length"] + s["allowance"] for s in roll["segments"])
+        assert roll["used_length"] == cut_sum + roll["kerf_count"] * plan["kerf_width"]
+        assert roll["used_length"] + roll["leftover"] == plan["roll_length"]
+    assert [r["leftover"] for r in plan["rolls"]] == [10, 50, 50]
+    assert plan["total_leftover"] == 110
+
+    # Persisted: the detail endpoint returns the identical plan.
+    detail = client.get(f"/api/plans/{plan['id']}")
+    assert detail.status_code == 200
+    assert detail.json() == plan
+
+
+def test_same_segments_without_bundle_keep_legacy_packing(client):
+    payload = bundle_payload()
+    for seg in payload["segments"]:
+        seg.pop("bundle", None)
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    plan = resp.json()
+    assert plan["rolls_used"] == 2
+    assert [[s["id"] for s in r["segments"]] for r in plan["rolls"]] == [
+        ["A", "C"],
+        ["B", "D"],
+    ]
+    assert all(
+        s["bundle"] is None for r in plan["rolls"] for s in r["segments"]
+    )
+
+
+def test_unfittable_bundle_located_on_each_member_and_not_persisted(client):
+    payload = {
+        "roll_length": 100,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 60, "bundle": "G9"},
+            {"id": "B", "length": 65, "bundle": "G9"},
+            {"id": "C", "length": 90},
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    bundle_errors = [e for e in detail if e["loc"][-1] == "bundle"]
+    # Every member's bundle input is flagged — and nothing else is flagged
+    # (each segment individually fits the roll).
+    assert [e["loc"] for e in bundle_errors] == [
+        ["segments", 0, "bundle"],
+        ["segments", 1, "bundle"],
+    ]
+    assert len(detail) == 2
+    # The group needs 60 + 65 + 10 = 135 mm: 35 mm over the roll, and the
+    # message states that excess.
+    assert all("by 35 mm" in e["msg"] for e in bundle_errors)
+    assert all("G9" in e["msg"] for e in bundle_errors)
+    # No plan is created by the failed submission.
+    assert client.get("/api/plans").json() == []
+
+
+def test_bundle_allowance_and_internal_kerfs_count_toward_group_fit(client):
+    # Cut lengths 40 + 40 (35+5) plus one intra-bundle kerf: 90 <= 100 fits.
+    payload = bundle_payload()
+    payload["segments"][1] = {"id": "B", "length": 35, "allowance": 5, "bundle": "G1"}
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    plan = resp.json()
+    assert [[s["id"] for s in r["segments"]] for r in plan["rolls"]] == [
+        ["A", "B"],
+        ["C"],
+        ["D"],
+    ]
+    roll1 = plan["rolls"][0]
+    assert roll1["used_length"] == 40 + 40 + 10
+    assert roll1["kerf_count"] == 1
+
+    # A larger allowance breaks the bundle: cut length 35 + 16 = 51, so the
+    # group needs 40 + 51 + 10 = 101 > 100 and is rejected with located errors.
+    payload["segments"][1]["allowance"] = 16
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = [e["loc"] for e in resp.json()["detail"]]
+    assert ["segments", 0, "bundle"] in locs
+    assert ["segments", 1, "bundle"] in locs
+    # The failed submission added nothing: only the first plan exists.
+    assert [p["id"] for p in client.get("/api/plans").json()] == [plan["id"]]
+
+
+def test_invalid_bundle_format_rejected_and_not_persisted(client):
+    payload = bundle_payload()
+    payload["segments"][0]["bundle"] = "bad bundle!"
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = [e["loc"] for e in resp.json()["detail"]]
+    assert ["body", "segments", 0, "bundle"] in locs
+    assert client.get("/api/plans").json() == []
+
+
+def test_bundle_segments_still_complete_and_undo_one_by_one(client):
+    plan = client.post("/api/plans", json=bundle_payload()).json()
+    pid = plan["id"]
+
+    # Bundled segments share roll 1 but progress stays per segment.
+    resp = client.post(f"/api/plans/{pid}/rolls/1/complete", json={"position": 1})
+    assert resp.status_code == 200
+    updated = resp.json()
+    assert updated["rolls"][0]["completed_count"] == 1
+    assert updated["completed_segment_count"] == 1
+    first, second = updated["rolls"][0]["segments"]
+    assert first["id"] == "A" and first["completed_at"] is not None
+    assert second["id"] == "B" and second["completed_at"] is None
+    # The bundle id rides along unchanged on the progress responses.
+    assert first["bundle"] == "G1" and second["bundle"] == "G1"
+
+    # Out-of-order completion of the second bundled segment conflicts.
+    resp = client.post(f"/api/plans/{pid}/rolls/1/complete", json={"position": 1})
+    assert resp.status_code == 409
+
+    resp = client.post(f"/api/plans/{pid}/rolls/1/undo", json={"position": 1})
+    assert resp.status_code == 200
+    assert resp.json()["completed_segment_count"] == 0
+
+    # Progress never alters the solution or the bundle membership.
+    final = client.get(f"/api/plans/{pid}").json()
+    assert [[s["id"] for s in r["segments"]] for r in final["rolls"]] == [
+        ["A", "B"],
+        ["C"],
+        ["D"],
+    ]
+    assert [r["leftover"] for r in final["rolls"]] == [10, 50, 50]
+
+
+def test_bundle_does_not_change_provenance_or_source_plan(client):
+    source = client.post("/api/plans", json=bundle_payload()).json()
+    assert source["source_plan_id"] is None
+
+    payload = bundle_payload()
+    payload["source_plan_id"] = source["id"]
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    adjusted = resp.json()
+    assert adjusted["source_plan_id"] == source["id"]
+    # Identical inputs (bundles included) solve identically; provenance only
+    # annotates the new plan.
+    assert adjusted["rolls"] == source["rolls"]
+    assert client.get(f"/api/plans/{source['id']}").json()["source_plan_id"] is None
